@@ -15,6 +15,7 @@ import { UserSelect } from "@/features/users/components/UserSelect/UserSelect";
 import { CaseStatus } from "@/generated/prisma/browser";
 import {
   createFieldValidator,
+  filterPhoneInput,
   optionalString,
   requiredString,
   selectEnumHandler,
@@ -144,7 +145,9 @@ export function AddCaseModal({ isOpen, onOpenChange, onSuccess, users }: AddCase
             <TextField
               label="Phone"
               value={phone}
-              onChange={(v) => setClientField("phone", v)}
+              onChange={(v) => setClientField("phone", filterPhoneInput(v))}
+              type="tel"
+              inputMode="tel"
               placeholder="Optional"
               validate={createFieldValidator(
                 CaseWithClientCreatePayloadSchema.shape.client.shape.phone_number,

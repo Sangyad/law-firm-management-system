@@ -28,6 +28,7 @@ import type { ActionStatusResponse } from "@/lib/action-response";
 import { combineDateTime, toCalendarDate, toTimeValue } from "@/lib/date";
 import {
   createFieldValidator,
+  filterPhoneInput,
   optionalString,
   requiredString,
   selectEnumHandler,
@@ -228,7 +229,9 @@ export function EditConsultationModal({
               <TextField
                 label="Phone"
                 value={clientPhone}
-                onChange={setClientPhone}
+                onChange={(v) => setClientPhone(filterPhoneInput(v))}
+                type="tel"
+                inputMode="tel"
                 placeholder="Optional"
                 validate={createFieldValidator(
                   ConsultationWithClientUpdatePayloadSchema.shape.client.shape.phone_number,

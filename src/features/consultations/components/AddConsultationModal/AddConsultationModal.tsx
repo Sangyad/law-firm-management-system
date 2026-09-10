@@ -19,6 +19,7 @@ import { ConsultationStatus } from "@/generated/prisma/browser";
 import { combineDateTime } from "@/lib/date";
 import {
   createFieldValidator,
+  filterPhoneInput,
   optionalString,
   requiredString,
   selectEnumHandler,
@@ -153,7 +154,9 @@ export function AddConsultationModal({
             <TextField
               label="Phone"
               value={phone}
-              onChange={(v) => setClientField("phone", v)}
+              onChange={(v) => setClientField("phone", filterPhoneInput(v))}
+              type="tel"
+              inputMode="tel"
               placeholder="Optional"
               validate={createFieldValidator(
                 ConsultationWithClientCreatePayloadSchema.shape.client.shape.phone_number,
