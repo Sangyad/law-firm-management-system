@@ -1,8 +1,10 @@
 import { getDocumentFilePathsByTaskId } from "@/features/documents/queries";
 import { TaskAssignmentStatus, TaskStatus, type ReviewDecision } from "@/generated/prisma/browser";
-import { TaskCancelledError } from "@/lib/errors";
+import { TaskLockedError, TaskValidationError } from "@/lib/errors";
 import { prisma, type TransactionClient } from "@/lib/prisma";
 import { deleteDocumentFiles } from "@/lib/storage-cleanup";
+
+import { hasAssigneeReviewerOverlap, wouldLeaveNoReviewer } from "./validation";
 
 export interface TaskCreateData {
   title: string;
@@ -16,6 +18,8 @@ export interface TaskUpdateData {
   title?: string;
   description?: string | null;
   assignee_ids?: string[];
+  reviewer_ids?: string[];
+  removed_reviewer_ids?: string[];
 }
 
 export interface ReviewDecisionData {
@@ -31,13 +35,13 @@ export function deriveTaskStatus(
   if (reviewerDecisions.some((d) => d === "Rejected")) return TaskStatus.Pending;
   if (
     reviewerDecisions.length > 0 &&
-    reviewerDecisions.every((d) => d === "Accepted") &&
-    (assignmentStatuses.length === 0 || assignmentStatuses.every((s) => s === "Submitted"))
+    reviewerDecisions.every((d) => d === "Approved") &&
+    (assignmentStatuses.length === 0 || assignmentStatuses.every((s) => s === "Done"))
   ) {
-    return TaskStatus.Completed;
+    return TaskStatus.Done;
   }
-  if (assignmentStatuses.length > 0 && assignmentStatuses.every((s) => s === "Submitted")) {
-    return TaskStatus.Submitted;
+  if (assignmentStatuses.length > 0 && assignmentStatuses.every((s) => s === "Done")) {
+    return TaskStatus.InReview;
   }
   return TaskStatus.Pending;
 }
@@ -63,6 +67,13 @@ export async function createTask(data: TaskCreateData): Promise<{ id: string }> 
   const { assignee_ids, created_by_user_id, case_id, ...taskData } = data;
   const attached = [...new Set([...(assignee_ids ?? []), created_by_user_id])];
 
+  if (assignee_ids?.includes(created_by_user_id)) {
+    throw new TaskValidationError(
+      "Assignee and reviewer must be distinct",
+      "A user cannot be both assignee and reviewer on the same task. Remove the overlapping user from one role.",
+    );
+  }
+
   return prisma.$transaction(async (tx) => {
     const task = await tx.task.create({
       data: {
@@ -85,7 +96,7 @@ export async function createTask(data: TaskCreateData): Promise<{ id: string }> 
 }
 
 export async function updateTask(id: string, data: TaskUpdateData): Promise<{ id: string }> {
-  const { assignee_ids, ...taskData } = data;
+  const { assignee_ids, reviewer_ids, removed_reviewer_ids, ...taskData } = data;
 
   return prisma.$transaction(async (tx) => {
     await lockTask(tx, id);
@@ -95,24 +106,33 @@ export async function updateTask(id: string, data: TaskUpdateData): Promise<{ id
       select: { status: true },
     });
     if (!currentTask) throw new Error("Task not found");
-    if (currentTask.status === TaskStatus.Cancelled) {
-      throw new Error("Task is locked and cannot be edited");
-    }
+    if (currentTask.status === TaskStatus.Done) throw new TaskLockedError();
 
     let removed: string[] = [];
     let added: string[] = [];
 
     if (assignee_ids !== undefined) {
-      const current = (
-        await tx.taskAssignment.findMany({
-          where: { task_id: id },
-          select: { user_id: true },
-        })
-      ).map((a) => a.user_id);
-      const currentSet = new Set(current);
+      const [current, reviewers] = await Promise.all([
+        tx.taskAssignment.findMany({ where: { task_id: id }, select: { user_id: true } }),
+        tx.taskReviewer.findMany({ where: { task_id: id }, select: { reviewer_user_id: true } }),
+      ]);
+      if (
+        hasAssigneeReviewerOverlap(
+          assignee_ids,
+          reviewers.map((r) => r.reviewer_user_id),
+        )
+      ) {
+        throw new TaskValidationError(
+          "Assignee and reviewer must be distinct",
+          "A user cannot be both assignee and reviewer on the same task. Remove the overlapping user from one role.",
+        );
+      }
+      const currentIds = current.map((a) => a.user_id);
+
+      const currentSet = new Set(currentIds);
       const newSet = new Set(assignee_ids);
 
-      removed = current.filter((u) => !newSet.has(u));
+      removed = currentIds.filter((u) => !newSet.has(u));
       added = assignee_ids.filter((u) => !currentSet.has(u));
     }
 
@@ -136,9 +156,61 @@ export async function updateTask(id: string, data: TaskUpdateData): Promise<{ id
       if (assignee_ids.length) {
         await grantCaseMembership(tx, task.case_id, assignee_ids);
       }
+    }
 
-      // Unchanged assignees keep their submission state; only added assignees
-      // start Pending, so the task re-derives from the preserved states.
+    if (reviewer_ids !== undefined) {
+      const existingReviewers = await tx.taskReviewer.findMany({
+        where: { task_id: id },
+        select: { reviewer_user_id: true },
+      });
+      const existingReviewerIds = new Set(existingReviewers.map((r) => r.reviewer_user_id));
+      const newReviewerIds = reviewer_ids.filter((id) => !existingReviewerIds.has(id));
+      if (newReviewerIds.length > 0) {
+        const finalAssigneeIds =
+          assignee_ids ??
+          (
+            await tx.taskAssignment.findMany({
+              where: { task_id: id },
+              select: { user_id: true },
+            })
+          ).map((a) => a.user_id);
+        if (hasAssigneeReviewerOverlap(newReviewerIds, finalAssigneeIds)) {
+          throw new TaskValidationError(
+            "Assignee and reviewer must be distinct",
+            "A user cannot be both assignee and reviewer on the same task. Remove the overlapping user from one role.",
+          );
+        }
+        await tx.taskReviewer.createMany({
+          data: newReviewerIds.map((reviewer_user_id) => ({
+            task_id: id,
+            reviewer_user_id,
+            decision: "Pending" as const,
+            reviewed_at: null,
+          })),
+          skipDuplicates: true,
+        });
+        await grantCaseMembership(tx, task.case_id, newReviewerIds);
+      }
+    }
+
+    if (removed_reviewer_ids !== undefined && removed_reviewer_ids.length > 0) {
+      await tx.taskReviewer.deleteMany({
+        where: { task_id: id, reviewer_user_id: { in: removed_reviewer_ids } },
+      });
+      const remainingReviewers = await tx.taskReviewer.count({ where: { task_id: id } });
+      if (wouldLeaveNoReviewer(remainingReviewers)) {
+        throw new TaskValidationError(
+          "At least one reviewer required",
+          "A task must have at least one reviewer. Add a reviewer before removing this one.",
+        );
+      }
+    }
+
+    if (
+      assignee_ids !== undefined ||
+      reviewer_ids !== undefined ||
+      removed_reviewer_ids !== undefined
+    ) {
       const [assignments, reviewers] = await Promise.all([
         tx.taskAssignment.findMany({ where: { task_id: id }, select: { status: true } }),
         tx.taskReviewer.findMany({ where: { task_id: id }, select: { decision: true } }),
@@ -183,7 +255,7 @@ export async function setAssignmentStatus(
       select: { status: true },
     });
     if (!task) throw new Error("Task not found");
-    if (task.status === TaskStatus.Completed || task.status === TaskStatus.Cancelled) {
+    if (task.status === TaskStatus.Done) {
       throw new Error("Assignment submission is locked for this task");
     }
 
@@ -224,8 +296,16 @@ export async function addTaskReviewer(
       select: { case_id: true, status: true },
     });
     if (!task) throw new Error("Task not found");
-    if (task.status === TaskStatus.Cancelled) {
-      throw new Error("Cannot add a reviewer to a cancelled task");
+
+    const assigneeMatch = await tx.taskAssignment.findFirst({
+      where: { task_id: taskId, user_id: reviewerUserId },
+      select: { user_id: true },
+    });
+    if (assigneeMatch !== null) {
+      throw new TaskValidationError(
+        "Assignee and reviewer must be distinct",
+        "A user cannot be both assignee and reviewer on the same task. Remove the user from assignees first.",
+      );
     }
 
     await tx.taskReviewer.upsert({
@@ -236,16 +316,14 @@ export async function addTaskReviewer(
       update: { decision: "Pending", reviewed_at: null },
     });
 
-    if (task.status === TaskStatus.Completed) {
-      // Adding a reviewer reopens the task for rework: reset existing reviewer
-      // decisions and assignee submissions to Pending.
+    if (task.status === TaskStatus.Done) {
       await tx.taskReviewer.updateMany({
         where: { task_id: taskId },
         data: { decision: "Pending", reviewed_at: null },
       });
       await tx.taskAssignment.updateMany({
         where: { task_id: taskId },
-        data: { status: "Pending" },
+        data: { status: "Todo" },
       });
     }
 
@@ -290,7 +368,15 @@ export async function removeTaskReviewer(
       where: { task_id: taskId, reviewer_user_id: reviewerUserId },
     });
 
-    if (task.status === TaskStatus.Submitted) {
+    const remainingReviewers = await tx.taskReviewer.count({ where: { task_id: taskId } });
+    if (wouldLeaveNoReviewer(remainingReviewers)) {
+      throw new TaskValidationError(
+        "At least one reviewer required",
+        "A task must have at least one reviewer. Add a reviewer before removing this one.",
+      );
+    }
+
+    if (task.status === TaskStatus.InReview) {
       const [assignments, reviewers] = await Promise.all([
         tx.taskAssignment.findMany({ where: { task_id: taskId }, select: { status: true } }),
         tx.taskReviewer.findMany({ where: { task_id: taskId }, select: { decision: true } }),
@@ -324,8 +410,8 @@ export async function applyReviewDecision(data: ReviewDecisionData): Promise<{
       select: { status: true },
     });
     if (!task) throw new Error("Task not found");
-    if (task.status !== TaskStatus.Submitted) {
-      throw new Error("Only submitted tasks can be reviewed");
+    if (task.status !== TaskStatus.InReview) {
+      throw new Error("Only tasks in review can be reviewed");
     }
 
     await tx.taskReviewer.updateMany({
@@ -344,8 +430,6 @@ export async function applyReviewDecision(data: ReviewDecisionData): Promise<{
       reviewers.map((r) => r.decision),
     );
 
-    // A rejection reopens the task for rework: reset every reviewer decision and
-    // every assignee submission to Pending.
     if (isRejection) {
       await tx.taskReviewer.updateMany({
         where: { task_id: taskId },
@@ -353,7 +437,7 @@ export async function applyReviewDecision(data: ReviewDecisionData): Promise<{
       });
       await tx.taskAssignment.updateMany({
         where: { task_id: taskId },
-        data: { status: "Pending" },
+        data: { status: "Todo" },
       });
     }
 
@@ -364,57 +448,5 @@ export async function applyReviewDecision(data: ReviewDecisionData): Promise<{
     });
 
     return { taskStatus };
-  });
-}
-
-export async function reopenTask(taskId: string): Promise<{ id: string; reopened: boolean }> {
-  return prisma.$transaction(async (tx) => {
-    await lockTask(tx, taskId);
-
-    const task = await tx.task.findUnique({
-      where: { id: taskId },
-      select: { status: true },
-    });
-    if (!task) throw new Error("Task not found");
-    if (task.status === TaskStatus.Cancelled) throw new TaskCancelledError();
-    if (task.status === TaskStatus.Pending) return { id: taskId, reopened: false };
-
-    // A manual reopen reuses the rework reset: every reviewer decision and
-    // assignee submission returns to Pending so the task re-derives cleanly.
-    await tx.taskReviewer.updateMany({
-      where: { task_id: taskId },
-      data: { decision: "Pending", reviewed_at: null },
-    });
-    await tx.taskAssignment.updateMany({
-      where: { task_id: taskId },
-      data: { status: "Pending" },
-    });
-
-    const updated = await tx.task.update({
-      where: { id: taskId },
-      data: { status: TaskStatus.Pending },
-      select: { id: true },
-    });
-
-    return { id: updated.id, reopened: true };
-  });
-}
-
-export async function cancelTask(taskId: string): Promise<{ id: string }> {
-  return prisma.$transaction(async (tx) => {
-    await lockTask(tx, taskId);
-
-    const task = await tx.task.findUnique({
-      where: { id: taskId },
-      select: { status: true },
-    });
-    if (!task) throw new Error("Task not found");
-    if (task.status === TaskStatus.Cancelled) throw new TaskCancelledError();
-
-    return tx.task.update({
-      where: { id: taskId },
-      data: { status: TaskStatus.Cancelled },
-      select: { id: true },
-    });
   });
 }

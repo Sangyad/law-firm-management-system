@@ -1,20 +1,14 @@
 "use client";
 
 import clsx from "clsx";
-import { useEffect, useState } from "react";
 
 import { Modal } from "@/components/ui/Modal/Modal";
-import { getDocumentsPaginatedAction } from "@/features/documents/actions";
-import { FileList } from "@/features/documents/components/FileList/FileList";
-import { ViewAttachmentModal } from "@/features/documents/components/ViewAttachmentModal/ViewAttachmentModal";
-import { useDocumentDownload } from "@/features/documents/hooks/useDocumentDownload";
-import type { DocumentRow } from "@/features/documents/queries";
-import { getTaskNotesAction } from "@/features/notes/actions";
-import { NoteList } from "@/features/notes/components/NoteList/NoteList";
-import type { NoteRow } from "@/features/notes/queries";
+import { TaskFilesSection } from "@/features/tasks/components/TaskFilesSection/TaskFilesSection";
+import { TaskNotesSection } from "@/features/tasks/components/TaskNotesSection/TaskNotesSection";
+import { TaskStatusBadge } from "@/features/tasks/components/TaskStatusBadge/TaskStatusBadge";
+import { mapReviewersForDisplay } from "@/features/tasks/display";
 import type { TaskDetailRow } from "@/features/tasks/queries";
 import { UserList } from "@/features/users/components/UserList/UserList";
-import { toastError } from "@/lib/toast-utils";
 
 import styles from "./ViewTaskModal.module.css";
 
@@ -25,145 +19,59 @@ interface ViewTaskModalProps {
 }
 
 export function ViewTaskModal({ isOpen, onOpenChange, task }: ViewTaskModalProps) {
-  const [documents, setDocuments] = useState<DocumentRow[]>([]);
-  const [notes, setNotes] = useState<NoteRow[]>([]);
-  const [isLoadingDocuments, setIsLoadingDocuments] = useState(true);
-  const [previewDocument, setPreviewDocument] = useState<DocumentRow | null>(null);
-  const { handleDownload } = useDocumentDownload();
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function loadDocuments() {
-      setDocuments([]);
-      setPreviewDocument(null);
-      setIsLoadingDocuments(true);
-      try {
-        const all: DocumentRow[] = [];
-        let cursor: string | undefined;
-        do {
-          const res = await getDocumentsPaginatedAction({
-            taskId: task.id,
-            pageSize: 100,
-            cursor,
-          });
-          all.push(...res.rows);
-          cursor = res.nextCursor ?? undefined;
-        } while (cursor);
-        if (cancelled) return;
-        setDocuments(all);
-      } catch {
-        if (cancelled) return;
-        toastError(
-          "Failed to load attachments",
-          "We couldn't load the attachments for this task. Please try again.",
-        );
-      } finally {
-        if (!cancelled) setIsLoadingDocuments(false);
-      }
-    }
-
-    async function loadNotes() {
-      setNotes([]);
-      try {
-        const rows = await getTaskNotesAction(task.id);
-        if (cancelled) return;
-        setNotes(rows);
-      } catch {
-        if (cancelled) return;
-        toastError(
-          "Failed to load notes",
-          "We couldn't load the notes for this task. Please try again.",
-        );
-      }
-    }
-
-    void loadDocuments();
-    void loadNotes();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [task.id]);
-
-  const hasFiles = documents.length > 0;
-  const hasNotes = notes.length > 0;
+  const hasFiles = true;
+  const hasNotes = true;
+  const noop = () => {};
 
   return (
-    <>
-      <Modal
-        title="Task"
-        isOpen={isOpen}
-        onOpenChange={onOpenChange}
-        className={clsx(styles.modal, hasFiles && hasNotes && styles.wide)}
-      >
-        <div className={styles.columns}>
-          <div className={styles.column}>
-            <div className={styles.field}>
-              <span className={styles.label}>Title</span>
-              <span className={styles.value}>{task.title}</span>
-            </div>
-            {task.description && (
-              <div className={styles.field}>
-                <span className={styles.label}>Description</span>
-                <span className={styles.value}>{task.description}</span>
-              </div>
-            )}
-            <div className={styles.field}>
-              <span className={styles.label}>Assignees</span>
-              <UserList users={task.assignTo} />
-            </div>
-            <div className={styles.field}>
-              <span className={styles.label}>Reviewers</span>
-              <UserList
-                users={task.reviewers.map((r) => ({ id: r.id, name: r.name, status: r.decision }))}
-              />
-            </div>
-            <div className={styles.field}>
-              <span className={styles.label}>Status</span>
-              <span className={styles.value}>{task.status}</span>
-            </div>
+    <Modal
+      title="Task"
+      isOpen={isOpen}
+      onOpenChange={onOpenChange}
+      className={clsx(styles.modal, hasFiles && hasNotes && styles.wide)}
+    >
+      <div className={styles.columns}>
+        <div className={styles.column}>
+          <div className={styles.field}>
+            <span className={styles.label}>Title</span>
+            <span className={styles.value}>{task.title}</span>
           </div>
-
-          {hasFiles && (
-            <>
-              <div className={styles.divider} />
-              <div className={styles.column}>
-                <div className={clsx(styles.field, styles.fillField)}>
-                  <span className={styles.label}>Attachments</span>
-                  <FileList
-                    entries={[]}
-                    isBusy={false}
-                    onRemove={() => {}}
-                    existingDocuments={documents}
-                    onView={setPreviewDocument}
-                    onDownload={handleDownload}
-                    isLoading={isLoadingDocuments}
-                    showSize={false}
-                  />
-                </div>
-              </div>
-            </>
+          {task.description && (
+            <div className={styles.field}>
+              <span className={styles.label}>Description</span>
+              <span className={styles.value}>{task.description}</span>
+            </div>
           )}
-
-          {hasNotes && (
-            <>
-              <div className={styles.divider} />
-              <div className={styles.column}>
-                <span className={styles.label}>Notes</span>
-                <NoteList notes={notes} />
-              </div>
-            </>
-          )}
+          <div className={styles.field}>
+            <span className={styles.label}>Assignees</span>
+            <UserList users={task.assignTo} />
+          </div>
+          <div className={styles.field}>
+            <span className={styles.label}>Reviewers</span>
+            <UserList users={mapReviewersForDisplay(task)} />
+          </div>
+          <div className={styles.field}>
+            <span className={styles.label}>Status</span>
+            <TaskStatusBadge status={task.status} taskForHint={task} />
+          </div>
         </div>
-      </Modal>
-      {previewDocument && (
-        <ViewAttachmentModal
-          isOpen={!!previewDocument}
-          onOpenChange={() => setPreviewDocument(null)}
-          document={previewDocument}
-        />
-      )}
-    </>
+
+        <div className={styles.divider} />
+        <div className={styles.column}>
+          <div className={clsx(styles.field, styles.fillField)}>
+            <span className={styles.label}>Attachments</span>
+            <TaskFilesSection taskId={task.id} canEdit={false} onSuccess={noop} readOnly />
+          </div>
+        </div>
+
+        <div className={styles.divider} />
+        <div className={styles.column}>
+          <div className={clsx(styles.field, styles.fillField)}>
+            <span className={styles.label}>Notes</span>
+            <TaskNotesSection taskId={task.id} canEdit={false} onSuccess={noop} readOnly />
+          </div>
+        </div>
+      </div>
+    </Modal>
   );
 }
