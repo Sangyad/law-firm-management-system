@@ -9,8 +9,9 @@ import { Select, SelectItem } from "@/components/ui/Select/Select";
 import { TextField } from "@/components/ui/TextField/TextField";
 import { createCaseAction } from "@/features/cases/actions";
 import { CaseCreatePayloadSchema } from "@/features/cases/schemas";
-import type { ActiveUserSummary } from "@/features/tasks/queries";
+import { UserChips } from "@/features/users/components/UserChips/UserChips";
 import { UserSelect } from "@/features/users/components/UserSelect/UserSelect";
+import type { ActiveUserSummary } from "@/features/users/queries";
 import { CaseStatus } from "@/generated/prisma/browser";
 import {
   createFieldValidator,
@@ -173,6 +174,9 @@ export function CreateCaseFromConsultationModal({
             onChange={setAssigneeIds}
             isDisabled={isPending}
           />
+          {assigneeIds.size > 0 && (
+            <UserChips users={users.filter((user) => assigneeIds.has(user.id))} />
+          )}
           <TextField
             label="Parties Involved"
             value={partiesInvolved}
