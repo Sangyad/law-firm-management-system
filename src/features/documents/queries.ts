@@ -182,6 +182,10 @@ export async function getDocumentFilePathsForCaseDeletion(caseId: string): Promi
 
 // ----- Access context -----
 
+// `assigned` resolves from the parent Case/Consultation only. Task-attached users are
+// covered because task mutations auto-grant Case membership on attach (grantCaseMembership
+// in features/tasks/mutations.ts); removing that grant would silently deny task members
+// here. Task scoping itself is enforced per action via getTaskAccessContext (see actions.ts).
 export const getDocumentAccessContext = cache(
   async (userId: string, documentId: string): Promise<AccessContext> => {
     const document = await prisma.document.findUnique({
