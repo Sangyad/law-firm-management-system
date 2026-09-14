@@ -138,6 +138,42 @@ describe("getNoteRowByIdAction", () => {
 
     expect(result).toEqual({ row: noteRow, canUpdate: true });
   });
+
+  it("throws Forbidden when task read is denied on a task note", async () => {
+    vi.mocked(getNoteAccessContext).mockResolvedValue({ assigned: true, own: false });
+    vi.mocked(getNoteById).mockResolvedValue({ ...noteRecord, task_id: uuid, case_id: null });
+    vi.mocked(getTaskAccessContext).mockResolvedValue({ assigned: false, own: false });
+
+    await expect(getNoteRowByIdAction(uuid)).rejects.toThrow("Forbidden");
+  });
+
+  it("returns canUpdate=false when task update is denied on a task note", async () => {
+    vi.mocked(getNoteAccessContext).mockResolvedValue({ assigned: true, own: false });
+    vi.mocked(getNoteById).mockResolvedValue({ ...noteRecord, task_id: uuid, case_id: null });
+    vi.mocked(getTaskAccessContext).mockResolvedValue({
+      assigned: true,
+      own: false,
+      taskOnly: false,
+    });
+
+    const result = await getNoteRowByIdAction(uuid);
+
+    expect(result).toEqual({ row: noteRow, canUpdate: false });
+  });
+
+  it("returns canUpdate=true when note and task update are both allowed", async () => {
+    vi.mocked(getNoteAccessContext).mockResolvedValue({ assigned: true, own: false });
+    vi.mocked(getNoteById).mockResolvedValue({ ...noteRecord, task_id: uuid, case_id: null });
+    vi.mocked(getTaskAccessContext).mockResolvedValue({
+      assigned: true,
+      own: false,
+      taskOnly: true,
+    });
+
+    const result = await getNoteRowByIdAction(uuid);
+
+    expect(result).toEqual({ row: noteRow, canUpdate: true });
+  });
 });
 
 describe("createNoteAction", () => {
@@ -225,9 +261,9 @@ describe("deleteNoteAction", () => {
 });
 
 describe("task subdata lock", () => {
-  const cancelledTask = {
+  const doneTask = {
     id: uuid,
-    status: "Cancelled" as const,
+    status: "Done" as const,
     case_id: uuid,
   } as unknown as Awaited<ReturnType<typeof getTaskById>>;
 
@@ -243,8 +279,8 @@ describe("task subdata lock", () => {
     });
   });
 
-  it("refuses to create a note on a cancelled task", async () => {
-    vi.mocked(getTaskById).mockResolvedValue(cancelledTask);
+  it("refuses to create a note on a done task", async () => {
+    vi.mocked(getTaskById).mockResolvedValue(doneTask);
     vi.mocked(createNoteForTask).mockRejectedValue(new TaskLockedError());
 
     const result = await createNoteAction({
@@ -265,8 +301,8 @@ describe("task subdata lock", () => {
     expect(createNoteForTask).toHaveBeenCalledWith(uuid, expect.any(Object));
   });
 
-  it("refuses to update a note on a cancelled task", async () => {
-    vi.mocked(getTaskById).mockResolvedValue(cancelledTask);
+  it("refuses to update a note on a done task", async () => {
+    vi.mocked(getTaskById).mockResolvedValue(doneTask);
     vi.mocked(getNoteById).mockResolvedValue({ ...noteRecord, task_id: uuid });
     vi.mocked(updateNoteForTask).mockRejectedValue(new TaskLockedError());
 
@@ -283,8 +319,8 @@ describe("task subdata lock", () => {
     expect(updateNoteForTask).toHaveBeenCalledWith(uuid, uuid, "Updated note");
   });
 
-  it("refuses to delete a note on a cancelled task", async () => {
-    vi.mocked(getTaskById).mockResolvedValue(cancelledTask);
+  it("refuses to delete a note on a done task", async () => {
+    vi.mocked(getTaskById).mockResolvedValue(doneTask);
     vi.mocked(getNoteById).mockResolvedValue({ ...noteRecord, task_id: uuid });
     vi.mocked(deleteNoteForTask).mockRejectedValue(new TaskLockedError());
 

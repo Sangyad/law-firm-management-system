@@ -13,7 +13,7 @@
   .columns {
     flex: 1;
     min-height: 0;
-    overflow-y: auto;
+    overflow: hidden;
     display: flex;
     gap: var(--space-2xl);
     text-align: left;
@@ -26,6 +26,11 @@
     display: flex;
     flex-direction: column;
     gap: var(--space-lg);
+  }
+
+  .columnScroll {
+    overflow-y: auto;
+    padding-bottom: var(--space-sm);
   }
 
   .divider {
@@ -44,27 +49,14 @@
     }
   }
 
-  .section {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-md);
-  }
-
-  .columnHeader {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: var(--space-md);
-  }
-
-  .label {
+  .banner {
+    background: var(--color-bg-info-subtle, #eef6ff);
+    border: 1px solid var(--color-border-info, #b6d4ff);
+    color: var(--color-text-info, #1a56db);
+    padding: var(--space-md) var(--space-lg);
+    border-radius: var(--radius-md, 8px);
     font-size: var(--font-size-sm);
-    font-weight: var(--font-weight-semibold);
-    color: var(--color-text-muted);
-  }
-
-  .addNoteButton {
-    font-size: var(--font-size-xs);
+    margin-bottom: var(--space-lg);
   }
 
   .reviewers {
@@ -95,6 +87,7 @@
   .modal {
     .columns {
       flex-direction: column;
+      overflow-y: auto;
     }
 
     .divider {

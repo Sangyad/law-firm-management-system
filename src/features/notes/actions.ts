@@ -29,13 +29,21 @@ import {
   updateNoteForTask,
 } from "./mutations";
 import {
+  getCaseNotesPaginated,
+  getCaseNotesWithTaskNotesPaginated,
   getNoteAccessContext,
   getNoteById,
   getNoteRowById,
-  getTaskNotes,
+  getTaskNotesPaginated,
   type NoteRow,
 } from "./queries";
-import { NoteCreatePayloadSchema, NoteIdSchema, NoteUpdatePayloadSchema } from "./schemas";
+import {
+  CaseNotesPageQuerySchema,
+  NoteCreatePayloadSchema,
+  NoteIdSchema,
+  NoteUpdatePayloadSchema,
+  TaskNotesPageQuerySchema,
+} from "./schemas";
 
 export async function getNoteRowByIdAction(
   noteId: string,
@@ -52,24 +60,86 @@ export async function getNoteRowByIdAction(
     throw new ForbiddenError();
   }
 
+  const existing = await getNoteById(parsed.data.noteId);
+  const taskAccess = existing?.task_id
+    ? await getTaskAccessContext(session.id, existing.task_id)
+    : null;
+  if (taskAccess && !can(session.role, "task.read", taskAccess)) {
+    throw new ForbiddenError();
+  }
+
   const row = await getNoteRowById(parsed.data.noteId);
 
   return {
     row,
-    canUpdate: row !== null && can(session.role, "note.update", access),
+    canUpdate:
+      row !== null &&
+      can(session.role, "note.update", access) &&
+      (taskAccess === null || can(session.role, "task.update", taskAccess)),
   };
 }
 
-export async function getTaskNotesAction(taskId: string): Promise<NoteRow[]> {
+export async function getTaskNotesPaginatedAction(
+  params: z.input<typeof TaskNotesPageQuerySchema>,
+): Promise<{
+  rows: NoteRow[];
+  nextCursor: string | null;
+}> {
   const session = await requireAuth();
 
-  const parsed = z.uuid().safeParse(taskId);
-  if (!parsed.success) return [];
+  const parsed = TaskNotesPageQuerySchema.safeParse(params);
+  if (!parsed.success) {
+    throw new Error("Invalid query parameters");
+  }
 
-  const access = await getTaskAccessContext(session.id, parsed.data);
-  if (!can(session.role, "task.read", access)) return [];
+  const access = await getTaskAccessContext(session.id, parsed.data.taskId);
+  if (!can(session.role, "task.read", access)) {
+    throw new ForbiddenError();
+  }
 
-  return getTaskNotes(parsed.data);
+  return getTaskNotesPaginated(parsed.data);
+}
+
+export async function getCaseNotesPaginatedAction(
+  params: z.input<typeof CaseNotesPageQuerySchema>,
+): Promise<{
+  rows: NoteRow[];
+  nextCursor: string | null;
+}> {
+  const session = await requireAuth();
+
+  const parsed = CaseNotesPageQuerySchema.safeParse(params);
+  if (!parsed.success) {
+    throw new Error("Invalid query parameters");
+  }
+
+  const access = await getCaseAccessContext(session.id, parsed.data.caseId);
+  if (!can(session.role, "note.read", access)) {
+    throw new ForbiddenError();
+  }
+
+  return getCaseNotesPaginated(parsed.data);
+}
+
+export async function getCaseNotesWithTaskNotesPaginatedAction(
+  params: z.input<typeof CaseNotesPageQuerySchema>,
+): Promise<{
+  rows: NoteRow[];
+  nextCursor: string | null;
+}> {
+  const session = await requireAuth();
+
+  const parsed = CaseNotesPageQuerySchema.safeParse(params);
+  if (!parsed.success) {
+    throw new Error("Invalid query parameters");
+  }
+
+  const access = await getCaseAccessContext(session.id, parsed.data.caseId);
+  if (!can(session.role, "note.read", access)) {
+    throw new ForbiddenError();
+  }
+
+  return getCaseNotesWithTaskNotesPaginated(parsed.data);
 }
 
 export async function createNoteAction(

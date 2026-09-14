@@ -4,6 +4,7 @@ import { getCaseAccessContext } from "@/features/cases/queries";
 import { getConsultationAccessContext } from "@/features/consultations/queries";
 import { prisma } from "@/lib/prisma";
 import type { AccessContext } from "@/lib/rbac";
+import type { CasePageQuery, TaskPageQuery } from "@/lib/types";
 
 export type NoteRow = {
   id: string;
@@ -50,6 +51,10 @@ export const getNoteRowById = cache(async (id: string): Promise<NoteRow | null> 
 
 // ----- Access context -----
 
+// `assigned` resolves from the parent Case/Consultation only. Task-attached users are
+// covered because task mutations auto-grant Case membership on attach (grantCaseMembership
+// in features/tasks/mutations.ts); removing that grant would silently deny task members
+// here. Task scoping itself is enforced per action via getTaskAccessContext (see actions.ts).
 export const getNoteAccessContext = cache(
   async (userId: string, noteId: string): Promise<AccessContext> => {
     const note = await prisma.note.findUnique({
@@ -80,17 +85,128 @@ export const getNoteAccessContext = cache(
   },
 );
 
-export const getTaskNotes = cache(async (taskId: string): Promise<NoteRow[]> => {
-  const notes = await prisma.note.findMany({
-    where: { task_id: taskId },
-    orderBy: { created_at: "desc" },
-    include: { createdBy: { select: { name: true } } },
-  });
+export const getTaskNotesPaginated = cache(
+  async ({
+    taskId,
+    search = "",
+    cursor,
+    pageSize = 20,
+  }: TaskPageQuery): Promise<{
+    rows: NoteRow[];
+    nextCursor: string | null;
+  }> => {
+    const where = {
+      task_id: taskId,
+      ...(search ? { content: { contains: search, mode: "insensitive" as const } } : {}),
+    };
 
-  return notes.map((n) => ({
-    id: n.id,
-    content: n.content,
-    author: n.createdBy.name,
-    created_at: n.created_at,
-  }));
-});
+    const orderBy = [{ created_at: "desc" as const }, { id: "asc" as const }];
+
+    const notes = await prisma.note.findMany({
+      take: pageSize + 1,
+      skip: cursor ? 1 : 0,
+      ...(cursor ? { cursor: { id: cursor } } : {}),
+      where,
+      orderBy,
+      include: {
+        createdBy: { select: { name: true } },
+      },
+    });
+
+    const hasMore = notes.length > pageSize;
+    if (hasMore) notes.pop();
+
+    const rows: NoteRow[] = notes.map((n) => ({
+      id: n.id,
+      content: n.content,
+      author: n.createdBy.name,
+      created_at: n.created_at,
+    }));
+
+    return { rows, nextCursor: hasMore ? notes[notes.length - 1].id : null };
+  },
+);
+
+export const getCaseNotesPaginated = cache(
+  async ({
+    caseId,
+    search = "",
+    cursor,
+    pageSize = 20,
+  }: CasePageQuery): Promise<{
+    rows: NoteRow[];
+    nextCursor: string | null;
+  }> => {
+    const where = {
+      case_id: caseId,
+      ...(search ? { content: { contains: search, mode: "insensitive" as const } } : {}),
+    };
+
+    const orderBy = [{ created_at: "desc" as const }, { id: "asc" as const }];
+
+    const notes = await prisma.note.findMany({
+      take: pageSize + 1,
+      skip: cursor ? 1 : 0,
+      ...(cursor ? { cursor: { id: cursor } } : {}),
+      where,
+      orderBy,
+      include: {
+        createdBy: { select: { name: true } },
+      },
+    });
+
+    const hasMore = notes.length > pageSize;
+    if (hasMore) notes.pop();
+
+    const rows: NoteRow[] = notes.map((n) => ({
+      id: n.id,
+      content: n.content,
+      author: n.createdBy.name,
+      created_at: n.created_at,
+    }));
+
+    return { rows, nextCursor: hasMore ? notes[notes.length - 1].id : null };
+  },
+);
+
+export const getCaseNotesWithTaskNotesPaginated = cache(
+  async ({
+    caseId,
+    search = "",
+    cursor,
+    pageSize = 20,
+  }: CasePageQuery): Promise<{
+    rows: NoteRow[];
+    nextCursor: string | null;
+  }> => {
+    const where = {
+      OR: [{ case_id: caseId }, { task: { case_id: caseId } }],
+      ...(search ? { content: { contains: search, mode: "insensitive" as const } } : {}),
+    };
+
+    const orderBy = [{ created_at: "desc" as const }, { id: "asc" as const }];
+
+    const notes = await prisma.note.findMany({
+      take: pageSize + 1,
+      skip: cursor ? 1 : 0,
+      ...(cursor ? { cursor: { id: cursor } } : {}),
+      where,
+      orderBy,
+      include: {
+        createdBy: { select: { name: true } },
+      },
+    });
+
+    const hasMore = notes.length > pageSize;
+    if (hasMore) notes.pop();
+
+    const rows: NoteRow[] = notes.map((n) => ({
+      id: n.id,
+      content: n.content,
+      author: n.createdBy.name,
+      created_at: n.created_at,
+    }));
+
+    return { rows, nextCursor: hasMore ? notes[notes.length - 1].id : null };
+  },
+);

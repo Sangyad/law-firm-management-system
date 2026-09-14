@@ -7,18 +7,20 @@ import { Button } from "@/components/ui/Button/Button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog/ConfirmDialog";
 import { type ColumnDef } from "@/components/ui/DataTable/DataTable";
 import { ServerDataTable } from "@/components/ui/ServerDataTable/ServerDataTable";
-import { StatusBadge, type StatusBadgeVariant } from "@/components/ui/StatusBadge/StatusBadge";
+import { StatusBadge } from "@/components/ui/StatusBadge/StatusBadge";
 import { getCaseTasksPaginatedAction } from "@/features/cases/actions";
 import {
   deleteTaskAction,
-  getActiveUsersAction,
   getTaskDetailRowByIdAction,
   type TaskCapabilities,
 } from "@/features/tasks/actions";
 import { AddTaskModal } from "@/features/tasks/components/AddTaskModal/AddTaskModal";
 import { EditTaskModal } from "@/features/tasks/components/EditTaskModal/EditTaskModal";
 import { ViewTaskModal } from "@/features/tasks/components/ViewTaskModal/ViewTaskModal";
-import type { ActiveUserSummary, TaskDetailRow, TaskRow } from "@/features/tasks/queries";
+import { getTaskStatusLabel, getTaskStatusVariant } from "@/features/tasks/display";
+import type { TaskDetailRow, TaskRow } from "@/features/tasks/queries";
+import { getActiveUsersAction, getSessionUserIdAction } from "@/features/users/actions";
+import type { ActiveUserSummary } from "@/features/users/queries";
 import { TaskStatus, type Role } from "@/generated/prisma/browser";
 import { can, type AccessContext } from "@/lib/rbac";
 import {
@@ -37,22 +39,20 @@ interface Props {
   userRole: Role | null;
 }
 
-const statusClassMap: Record<TaskStatus, StatusBadgeVariant> = {
-  Pending: "pending",
-  Submitted: "info",
-  Completed: "done",
-  Cancelled: "cancelled",
-};
-
 const columns: ColumnDef<TaskRow>[] = [
   { id: "title", name: "Title", isRowHeader: true, allowsSorting: true },
   {
     id: "status",
     name: "Status",
     allowsSorting: true,
-    render: (value) => (
-      <StatusBadge variant={statusClassMap[value as TaskStatus]}>{value as string}</StatusBadge>
-    ),
+    render: (value) => {
+      const status = value as TaskStatus;
+      return (
+        <StatusBadge variant={getTaskStatusVariant(status)}>
+          {getTaskStatusLabel(status)}
+        </StatusBadge>
+      );
+    },
   },
   { id: "assignTo", name: "Assigned To" },
   { id: "reviewers", name: "Reviewers" },
@@ -68,6 +68,7 @@ export function TasksTab({ caseId, access, userRole }: Props) {
   const [pendingEditId, setPendingEditId] = useState<string | null>(null);
   const [pendingViewId, setPendingViewId] = useState<string | null>(null);
   const [users, setUsers] = useState<ActiveUserSummary[]>([]);
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const latestRequest = useRef(0);
 
@@ -80,9 +81,13 @@ export function TasksTab({ caseId, access, userRole }: Props) {
 
     async function load() {
       try {
-        const data = await getActiveUsersAction();
+        const [usersData, sessionUserId] = await Promise.all([
+          getActiveUsersAction(),
+          getSessionUserIdAction(),
+        ]);
         if (cancelled) return;
-        setUsers(data);
+        setUsers(usersData);
+        setCurrentUserId(sessionUserId);
       } catch {
         if (cancelled) return;
         toastError("Failed to load assignees", "We couldn't load the user list. Please try again.");
@@ -134,7 +139,7 @@ export function TasksTab({ caseId, access, userRole }: Props) {
         return;
       }
       const c = data.capabilities;
-      if (c.canEdit || c.canReview || c.canManageReviewers || c.canSubmit || c.canSetStatus) {
+      if (c.canEdit || c.canReview || c.canManageReviewers || c.canSubmit) {
         setEditTask(data.row);
         setEditCapabilities(data.capabilities);
         setEditCurrentUserId(data.currentUserId);
@@ -220,19 +225,22 @@ export function TasksTab({ caseId, access, userRole }: Props) {
         searchLabel="Search tasks"
         selectionMode="none"
         collectionDependencies={[pendingEditId, pendingViewId]}
-        renderAddButton={canCreate}
+        renderAddButton={canCreate && currentUserId !== null}
         addButtonLabel="Add Task"
         onAddButtonPress={() => setIsAddOpen(true)}
         refreshTrigger={refreshTrigger}
       />
 
-      <AddTaskModal
-        isOpen={isAddOpen}
-        onOpenChange={setIsAddOpen}
-        onSuccess={handleRefresh}
-        caseId={caseId}
-        users={users}
-      />
+      {currentUserId !== null && (
+        <AddTaskModal
+          isOpen={isAddOpen}
+          onOpenChange={setIsAddOpen}
+          onSuccess={handleRefresh}
+          caseId={caseId}
+          users={users}
+          currentUserId={currentUserId}
+        />
+      )}
 
       {editTask && editCapabilities && (
         <EditTaskModal

@@ -9,11 +9,16 @@ import { Modal } from "@/components/ui/Modal/Modal";
 import { TextField } from "@/components/ui/TextField/TextField";
 import { FileList } from "@/features/documents/components/FileList/FileList";
 import { addTaskReviewerAction, createTaskAction } from "@/features/tasks/actions";
-import type { ActiveUserSummary } from "@/features/tasks/queries";
+import { AssigneeReviewerPicker } from "@/features/tasks/components/AssigneeReviewerPicker/AssigneeReviewerPicker";
 import { TaskCreatePayloadSchema } from "@/features/tasks/schemas";
-import { UserSelect } from "@/features/users/components/UserSelect/UserSelect";
+import type { ActiveUserSummary } from "@/features/users/queries";
 import { ACCEPTED_FILE_EXTENSIONS } from "@/lib/file-types";
-import { createFieldValidator, optionalString, requiredString } from "@/lib/form-utils";
+import {
+  createFieldValidator,
+  firstIssueMessage,
+  optionalString,
+  requiredString,
+} from "@/lib/form-utils";
 import { toastActionError, toastError, toastInfo, toastSuccess } from "@/lib/toast-utils";
 import { useFileUpload } from "@/lib/useFileUpload";
 
@@ -25,6 +30,7 @@ interface AddTaskModalProps {
   onSuccess: () => void;
   caseId: string;
   users: ActiveUserSummary[];
+  currentUserId: string;
 }
 
 export function AddTaskModal({
@@ -33,11 +39,12 @@ export function AddTaskModal({
   onSuccess,
   caseId,
   users,
+  currentUserId,
 }: AddTaskModalProps) {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [assigneeIds, setAssigneeIds] = useState<Set<string>>(new Set());
-  const [reviewerIds, setReviewerIds] = useState<Set<string>>(new Set());
+  const [reviewerIds, setReviewerIds] = useState<Set<string>>(() => new Set([currentUserId]));
   const [isPending, setIsPending] = useState(false);
   const [createdTaskId, setCreatedTaskId] = useState<string | null>(null);
   const [addedReviewerIds, setAddedReviewerIds] = useState<Set<string>>(new Set());
@@ -49,7 +56,7 @@ export function AddTaskModal({
     setTitle("");
     setDescription("");
     setAssigneeIds(new Set());
-    setReviewerIds(new Set());
+    setReviewerIds(new Set([currentUserId]));
     setCreatedTaskId(null);
     setAddedReviewerIds(new Set());
     resetFiles();
@@ -65,14 +72,6 @@ export function AddTaskModal({
     event.preventDefault();
     if (isPending) return;
 
-    if (assigneeIds.size < 1) {
-      toastError(
-        "Add at least one assignee",
-        "A task needs at least one assignee before it can be created.",
-      );
-      return;
-    }
-
     const parsed = TaskCreatePayloadSchema.safeParse({
       title: requiredString(title),
       description: optionalString(description),
@@ -83,7 +82,7 @@ export function AddTaskModal({
     if (!parsed.success) {
       toastError(
         "Failed to create task",
-        "Please review the highlighted form fields and try again.",
+        firstIssueMessage(parsed.error, "Please review the highlighted form fields and try again."),
       );
       return;
     }
@@ -109,7 +108,7 @@ export function AddTaskModal({
       if (reviewerIds.size > 0) {
         let reviewerFailed = false;
         for (const id of reviewerIds) {
-          if (addedReviewerIds.has(id)) continue;
+          if (id === currentUserId || addedReviewerIds.has(id)) continue;
           const result = await addTaskReviewerAction({ taskId, reviewerUserId: id });
           if (!result.success) {
             reviewerFailed = true;
@@ -159,7 +158,7 @@ export function AddTaskModal({
 
   return (
     <Modal title="Add Task" isOpen={isOpen} onOpenChange={handleCancel} className={styles.modal}>
-      <Form onSubmit={handleSubmit} className={styles.form}>
+      <Form onSubmit={handleSubmit} validationBehavior="native" className={styles.form}>
         <div className={styles.columns}>
           <div className={styles.column}>
             <TextField
@@ -180,19 +179,16 @@ export function AddTaskModal({
               validate={createFieldValidator(TaskCreatePayloadSchema.shape.description)}
               isDisabled={isPending}
             />
-            <UserSelect
+            <AssigneeReviewerPicker
               users={users}
-              selectedIds={assigneeIds}
-              onChange={setAssigneeIds}
-              isDisabled={isPending}
-            />
-            <UserSelect
-              users={users}
-              selectedIds={reviewerIds}
-              onChange={setReviewerIds}
-              isDisabled={isPending}
-              label="Reviewers"
-              placeholder="Select reviewers..."
+              assigneeIds={assigneeIds}
+              onAssigneeIdsChange={setAssigneeIds}
+              reviewerIds={reviewerIds}
+              onReviewerIdsChange={setReviewerIds}
+              creatorUserId={currentUserId}
+              isAssigneeDisabled={isPending}
+              isReviewerDisabled={isPending}
+              validate={createFieldValidator(TaskCreatePayloadSchema.shape.assignee_ids)}
             />
           </div>
 

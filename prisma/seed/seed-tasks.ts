@@ -34,7 +34,7 @@ const tasks: TaskData[] = [
     caseTitle: "Dela Cruz Property Title Transfer",
     title: "Coordinate Tax Payment with BIR",
     description: "Compute and process capital gains tax and documentary stamp tax payments at BIR",
-    status: "Submitted",
+    status: "InReview",
     createdByEmail: "catherine.diaz@aninolaw.com",
     assigneeEmails: ["jessica.lim@aninolaw.com"],
     reviewerEmail: "david.tan@aninolaw.com",
@@ -53,7 +53,7 @@ const tasks: TaskData[] = [
     title: "Gather Evidence of Psychological Incapacity",
     description:
       "Collect medical records, witness affidavits, and counseling history to support Article 36 claim",
-    status: "Submitted",
+    status: "InReview",
     createdByEmail: "sofia.villanueva@aninolaw.com",
     assigneeEmails: ["kevin.garcia@aninolaw.com"],
     reviewerEmail: "sofia.villanueva@aninolaw.com",
@@ -106,7 +106,7 @@ const tasks: TaskData[] = [
     title: "Secure Supporting Documents from Client",
     description:
       "Collect marriage certificate, birth certificates of children, and evidence of incapacity",
-    status: "Submitted",
+    status: "InReview",
     createdByEmail: "sofia.villanueva@aninolaw.com",
     assigneeEmails: ["maya.fernandez@aninolaw.com"],
     reviewerEmail: "sofia.villanueva@aninolaw.com",
@@ -125,7 +125,7 @@ const tasks: TaskData[] = [
     title: "Draft Joint Venture Agreement",
     description:
       "Prepare JVA between Navarro and Kingsbridge Capital with profit-sharing and exit clauses",
-    status: "Completed",
+    status: "Done",
     createdByEmail: "angela.mercado@aninolaw.com",
     assigneeEmails: ["angela.mercado@aninolaw.com"],
   },
@@ -134,7 +134,7 @@ const tasks: TaskData[] = [
     title: "Review Development Permits and Licenses",
     description:
       "Verify HLURB clearance, building permits, and environmental compliance certificates",
-    status: "Completed",
+    status: "Done",
     createdByEmail: "david.tan@aninolaw.com",
     assigneeEmails: ["david.tan@aninolaw.com"],
   },
@@ -142,7 +142,7 @@ const tasks: TaskData[] = [
     caseTitle: "Navarro Estate Development Joint Venture",
     title: "Conduct Due Diligence on Property",
     description: "Full title search, tax declaration verification, and zoning compliance check",
-    status: "Completed",
+    status: "Done",
     createdByEmail: "david.tan@aninolaw.com",
     assigneeEmails: ["jessica.lim@aninolaw.com"],
   },
@@ -203,7 +203,7 @@ const tasks: TaskData[] = [
     title: "Register Corporation with SEC",
     description:
       "Process SEC registration including name reservation, filing of articles, and payment of fees",
-    status: "Completed",
+    status: "Done",
     createdByEmail: "angela.mercado@aninolaw.com",
     assigneeEmails: ["maya.fernandez@aninolaw.com"],
   },
@@ -212,7 +212,7 @@ const tasks: TaskData[] = [
     title: "Draft Articles of Incorporation and By-Laws",
     description:
       "Draft AOI and by-laws for Villanueva Enterprises Inc. with P5M authorized capital",
-    status: "Completed",
+    status: "Done",
     createdByEmail: "angela.mercado@aninolaw.com",
     assigneeEmails: ["angela.mercado@aninolaw.com"],
   },
@@ -220,7 +220,7 @@ const tasks: TaskData[] = [
     caseTitle: "Villanueva Corporation Registration",
     title: "Secure Barangay and Mayor's Permits",
     description: "Apply for business permits with Mandaluyong City Hall and Barangay Barangka",
-    status: "Completed",
+    status: "Done",
     createdByEmail: "angela.mercado@aninolaw.com",
     assigneeEmails: ["maya.fernandez@aninolaw.com"],
   },
@@ -265,7 +265,7 @@ const tasks: TaskData[] = [
     title: "Gather Employment Records and Contracts",
     description:
       "Collect employment contract, payslips, attendance records, and termination notice from client",
-    status: "Submitted",
+    status: "InReview",
     createdByEmail: "miguel.cruz@aninolaw.com",
     assigneeEmails: ["jessica.lim@aninolaw.com"],
     reviewerEmail: "miguel.cruz@aninolaw.com",
@@ -374,7 +374,7 @@ const tasks: TaskData[] = [
     title: "File Motion to Suspend Foreclosure Sale",
     description:
       "Draft urgent motion to enjoin extrajudicial foreclosure, citing deficiency in notice requirements",
-    status: "Submitted",
+    status: "InReview",
     createdByEmail: "marco.lopez@aninolaw.com",
     assigneeEmails: ["marco.lopez@aninolaw.com"],
     reviewerEmail: "maria.anino@aninolaw.com",
@@ -402,7 +402,7 @@ const tasks: TaskData[] = [
     title: "Prepare Judicial Affidavits for Witnesses",
     description:
       "Draft judicial affidavits for three witnesses — client, warehouse supervisor, and delivery coordinator",
-    status: "Submitted",
+    status: "InReview",
     createdByEmail: "miguel.cruz@aninolaw.com",
     assigneeEmails: ["jessica.lim@aninolaw.com"],
     reviewerEmail: "miguel.cruz@aninolaw.com",
@@ -459,10 +459,9 @@ export async function seedTasks(
     });
     created.push({ id: task.id, title: t.title });
 
-    // Assignees are "Submitted" once the task reaches Submitted/Completed,
-    // otherwise they are still working (Pending).
-    const assigneeStatus =
-      t.status === "Submitted" || t.status === "Completed" ? "Submitted" : "Pending";
+    // Assignees are "Done" once the task reaches InReview/Done,
+    // otherwise they are still working (Todo).
+    const assigneeStatus = t.status === "InReview" || t.status === "Done" ? "Done" : "Todo";
 
     for (const email of t.assigneeEmails) {
       await prisma.taskAssignment.create({
@@ -477,16 +476,21 @@ export async function seedTasks(
     // The creator is always a reviewer (task-review-workflow.md §2). Any
     // explicitly seeded reviewer is added alongside the creator; the Set
     // de-duplicates the case where the creator reviews their own task.
-    const reviewerIds = new Set<string>([createdByUserId]);
-    if (t.reviewerEmail) reviewerIds.add(userByEmail[t.reviewerEmail]);
+    // Ensure seeded task assignees and reviewers never overlap.
+    const assigneeUserIds = new Set(t.assigneeEmails.map((e) => userByEmail[e]));
+    const reviewerIds = new Set<string>([createdByUserId].filter((id) => !assigneeUserIds.has(id)));
+    if (t.reviewerEmail) {
+      const reviewerUserId = userByEmail[t.reviewerEmail];
+      if (!assigneeUserIds.has(reviewerUserId)) reviewerIds.add(reviewerUserId);
+    }
 
-    const reviewerAccepted = t.status === "Completed";
+    const reviewerAccepted = t.status === "Done";
 
     await prisma.taskReviewer.createMany({
       data: [...reviewerIds].map((user_id) => ({
         task_id: task.id,
         reviewer_user_id: user_id,
-        decision: reviewerAccepted ? "Accepted" : "Pending",
+        decision: reviewerAccepted ? "Approved" : "Pending",
         reviewed_at: reviewerAccepted ? new Date() : null,
       })),
       skipDuplicates: true,

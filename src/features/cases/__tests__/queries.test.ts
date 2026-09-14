@@ -7,8 +7,6 @@ import { prisma } from "@/lib/prisma";
 import {
   getCaseEditData,
   getCaseMilestonesPaginated,
-  getCaseNotesPaginated,
-  getCaseNotesWithTaskNotesPaginated,
   getCaseOverviewById,
   getCasesPaginated,
   getCaseTasksPaginated,
@@ -23,7 +21,6 @@ vi.mock("@/lib/prisma", () => ({
     auditLog: { findMany: vi.fn() },
     case: { findMany: vi.fn(), findUnique: vi.fn() },
     caseMilestone: { findMany: vi.fn() },
-    note: { findMany: vi.fn() },
     payment: { findMany: vi.fn() },
     task: { findMany: vi.fn() },
   },
@@ -467,140 +464,6 @@ describe("getCaseTasksPaginated", () => {
   });
 });
 
-describe("getCaseNotesPaginated", () => {
-  const mockNote = (overrides: Record<string, unknown> = {}) => ({
-    id: "n1",
-    content: "Client called about the case",
-    case_id: "1",
-    consultation_id: null,
-    task_id: null,
-    created_by_user_id: "u1",
-    created_at: new Date("2024-06-01"),
-    updated_at: new Date("2024-06-01"),
-    createdBy: { name: "Bob Lawyer" },
-    ...overrides,
-  });
-
-  it("returns mapped note rows", async () => {
-    const notes = [
-      mockNote(),
-      mockNote({ id: "n2", content: "Evidence received", createdBy: { name: "Carol Paralegal" } }),
-    ];
-    vi.mocked(prisma.note.findMany).mockResolvedValue(notes);
-
-    const result = await getCaseNotesPaginated({ caseId: "1", pageSize: 10 });
-
-    expect(result.rows).toHaveLength(2);
-    expect(result.rows[0]).toEqual({
-      id: "n1",
-      content: "Client called about the case",
-      author: "Bob Lawyer",
-      created_at: notes[0].created_at,
-    });
-  });
-
-  it("filters by search term", async () => {
-    vi.mocked(prisma.note.findMany).mockResolvedValue([mockNote()]);
-
-    await getCaseNotesPaginated({ caseId: "1", search: "evidence" });
-
-    expect(prisma.note.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: { case_id: "1", content: { contains: "evidence", mode: "insensitive" } },
-      }),
-    );
-  });
-
-  it("handles cursor pagination", async () => {
-    const notes = Array.from({ length: 4 }, (_, i) => mockNote({ id: String(i + 1) }));
-    vi.mocked(prisma.note.findMany).mockResolvedValue(notes);
-
-    const result = await getCaseNotesPaginated({ caseId: "1", pageSize: 3 });
-
-    expect(result.rows).toHaveLength(3);
-    expect(result.nextCursor).toBe("3");
-  });
-
-  it("returns empty when none exist", async () => {
-    vi.mocked(prisma.note.findMany).mockResolvedValue([]);
-
-    const result = await getCaseNotesPaginated({ caseId: "1" });
-
-    expect(result.rows).toEqual([]);
-  });
-});
-
-describe("getCaseNotesWithTaskNotesPaginated", () => {
-  const mockNote = (overrides: Record<string, unknown> = {}) => ({
-    id: "n1",
-    content: "Client called about the case",
-    case_id: "1",
-    consultation_id: null,
-    task_id: null,
-    created_by_user_id: "u1",
-    created_at: new Date("2024-06-01"),
-    updated_at: new Date("2024-06-01"),
-    createdBy: { name: "Bob Lawyer" },
-    ...overrides,
-  });
-
-  it("returns mapped note rows including task notes", async () => {
-    const notes = [
-      mockNote({ id: "n1", content: "Case note 1", case_id: "1", task_id: null }),
-      mockNote({
-        id: "n2",
-        content: "Task note 1",
-        case_id: null,
-        task_id: "t1",
-        task: { id: "t1", case_id: "1" },
-      }),
-    ];
-    vi.mocked(prisma.note.findMany).mockResolvedValue(notes);
-
-    const result = await getCaseNotesWithTaskNotesPaginated({ caseId: "1", pageSize: 10 });
-
-    expect(result.rows).toHaveLength(2);
-    expect(result.rows[0]).toEqual({
-      id: "n1",
-      content: "Case note 1",
-      author: "Bob Lawyer",
-      created_at: notes[0].created_at,
-    });
-    expect(prisma.note.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: {
-          OR: [{ case_id: "1" }, { task: { case_id: "1" } }],
-        },
-        orderBy: [{ created_at: "desc" }, { id: "asc" }],
-      }),
-    );
-  });
-
-  it("filters by search term", async () => {
-    vi.mocked(prisma.note.findMany).mockResolvedValue([mockNote()]);
-
-    await getCaseNotesWithTaskNotesPaginated({ caseId: "1", search: "evidence" });
-
-    expect(prisma.note.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: {
-          OR: [{ case_id: "1" }, { task: { case_id: "1" } }],
-          content: { contains: "evidence", mode: "insensitive" },
-        },
-      }),
-    );
-  });
-
-  it("returns empty when none exist", async () => {
-    vi.mocked(prisma.note.findMany).mockResolvedValue([]);
-
-    const result = await getCaseNotesWithTaskNotesPaginated({ caseId: "1" });
-
-    expect(result.rows).toEqual([]);
-    expect(result.nextCursor).toBeNull();
-  });
-});
-
 describe("getCaseMilestonesPaginated", () => {
   const mockMilestone = (overrides: Record<string, unknown> = {}) => ({
     id: "m1",
@@ -814,7 +677,9 @@ describe("getEntityActivityLogPaginated (Case)", () => {
   });
 });
 
-type CaseWithAssignments = Case & { caseAssignments: { user_id: string }[] };
+type CaseWithAssignments = Case & {
+  caseAssignments: { user_id: string; user: { id: string; name: string } }[];
+};
 
 describe("getCaseEditData", () => {
   const caseEditRecord: CaseWithAssignments = {
@@ -857,7 +722,7 @@ describe("getCaseEditData", () => {
         parties_involved: true,
         source_consultation_id: true,
         caseAssignments: {
-          select: { user_id: true },
+          select: { user_id: true, user: { select: { id: true, name: true } } },
         },
       },
     });
@@ -866,13 +731,22 @@ describe("getCaseEditData", () => {
   it("includes assignee ids of inactive users", async () => {
     const record: CaseWithAssignments = {
       ...caseEditRecord,
-      caseAssignments: [{ user_id: "u1" }, { user_id: "u9" }],
+      caseAssignments: [
+        { user_id: "u1", user: { id: "u1", name: "Active User" } },
+        { user_id: "u9", user: { id: "u9", name: "Inactive User" } },
+      ],
     };
     vi.mocked(prisma.case.findUnique).mockResolvedValue(record);
 
     const result = await getCaseEditData("1");
 
-    expect(result).toMatchObject({ assignee_ids: ["u1", "u9"] });
+    expect(result).toMatchObject({
+      assignee_ids: ["u1", "u9"],
+      assignees: [
+        { id: "u1", name: "Active User" },
+        { id: "u9", name: "Inactive User" },
+      ],
+    });
   });
 
   it("returns null when the case is not found", async () => {

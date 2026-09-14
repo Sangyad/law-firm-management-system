@@ -51,7 +51,7 @@ export class UnauthorizedError extends Error {
 
 /**
  * Error thrown when a mutation targets a Note or Document whose parent
- * task is `Cancelled`. A cancelled task is terminal, so its attachments are
+ * task is `Done`. A done task is terminal, so its attachments are
  * write-locked (create/update/delete refused).
  */
 export class TaskLockedError extends Error {
@@ -59,30 +59,28 @@ export class TaskLockedError extends Error {
   readonly digest = "TASK_LOCKED";
 
   constructor() {
-    super("This task is cancelled and its attachments are locked");
+    super("This task is done and its attachments are locked");
     this.name = "TaskLockedError";
   }
 }
 
 /**
  * Message returned when a mutation targets a Note or Document whose parent
- * task is `Cancelled`. A cancelled task is terminal, so its attachments are
+ * task is `Done`. A done task is terminal, so its attachments are
  * write-locked (create/update/delete refused).
  */
-export const TASK_LOCKED_MESSAGE = "This task is cancelled and its attachments are locked";
+export const TASK_LOCKED_MESSAGE = "This task is done and its attachments are locked";
 
-/**
- * Error thrown by a status-transition mutation when the target task is
- * already `Cancelled`. Cancelled is terminal, so cancel and reopen requests
- * that raced past the pre-read are refused under the row lock.
- */
-export class TaskCancelledError extends Error {
-  /** Stable identifier for error boundary detection. */
-  readonly digest = "TASK_CANCELLED";
+export class TaskValidationError extends Error {
+  readonly digest = "TASK_VALIDATION";
+  readonly title: string;
+  readonly description: string;
 
-  constructor() {
-    super("This task has already been cancelled");
-    this.name = "TaskCancelledError";
+  constructor(title: string, description: string) {
+    super(description);
+    this.name = "TaskValidationError";
+    this.title = title;
+    this.description = description;
   }
 }
 
@@ -117,6 +115,9 @@ export function toActionResponse(
   if (error instanceof ForbiddenError) return actionForbidden();
   if (error instanceof UnauthorizedError) return actionUnauthorized();
   if (error instanceof TaskLockedError) return actionLocked();
+  if (error instanceof TaskValidationError) {
+    return actionConflict(error.title, error.description);
+  }
   if ((error as { code?: string } | null)?.code === "P2002" && conflict) {
     return actionConflict(conflict.title, conflict.description);
   }
