@@ -4,13 +4,46 @@ import { getDocumentFilePathsByConsultationId } from "@/features/documents/queri
 import { prisma } from "@/lib/prisma";
 import { deleteDocumentFiles } from "@/lib/storage-cleanup";
 
-import { createConsultation, deleteConsultation, updateConsultation } from "../mutations";
+import {
+  acceptConsultationWithCase,
+  createConsultation,
+  deleteConsultation,
+  transitionConsultationWithNote,
+  updateConsultation,
+  updateConsultationStatus,
+} from "../mutations";
 
-vi.mock("@/lib/prisma", () => ({
-  prisma: {
-    consultation: { create: vi.fn(), update: vi.fn(), delete: vi.fn() },
-  },
-}));
+interface MockConsultationPrisma {
+  consultation: {
+    create: ReturnType<typeof vi.fn>;
+    update: ReturnType<typeof vi.fn>;
+    updateMany: ReturnType<typeof vi.fn>;
+    delete: ReturnType<typeof vi.fn>;
+    findUnique: ReturnType<typeof vi.fn>;
+  };
+  case: { findUnique: ReturnType<typeof vi.fn>; create: ReturnType<typeof vi.fn> };
+  note: { create: ReturnType<typeof vi.fn> };
+  $transaction: ReturnType<typeof vi.fn>;
+}
+
+vi.mock("@/lib/prisma", () => {
+  const consultation = {
+    create: vi.fn(),
+    update: vi.fn(),
+    updateMany: vi.fn(),
+    delete: vi.fn(),
+    findUnique: vi.fn(),
+  };
+  const caseModel = { findUnique: vi.fn(), create: vi.fn() };
+  const note = { create: vi.fn() };
+  const prisma: MockConsultationPrisma = {
+    consultation,
+    case: caseModel,
+    note,
+    $transaction: vi.fn((fn: (tx: MockConsultationPrisma) => Promise<unknown>) => fn(prisma)),
+  };
+  return { prisma };
+});
 
 vi.mock("@/features/documents/queries", () => ({
   getDocumentFilePathsByConsultationId: vi.fn(),
@@ -54,7 +87,6 @@ it("updateConsultation strips id from the update data", async () => {
     client_id: uuid,
     concern: "Breach of contract",
     booking_datetime: booking,
-    status: "Scheduled",
   });
 
   expect(prisma.consultation.update).toHaveBeenCalledWith({
@@ -63,7 +95,6 @@ it("updateConsultation strips id from the update data", async () => {
       client_id: uuid,
       concern: "Breach of contract",
       booking_datetime: booking,
-      status: "Scheduled",
     },
     select: { id: true },
   });
@@ -123,7 +154,6 @@ it("updateConsultation replaces consultationAssignments when assignee_ids are pr
     client_id: uuid,
     concern: "Breach of contract",
     booking_datetime: booking,
-    status: "Scheduled",
     assignee_ids: ["u2"],
   });
 
@@ -133,7 +163,6 @@ it("updateConsultation replaces consultationAssignments when assignee_ids are pr
       client_id: uuid,
       concern: "Breach of contract",
       booking_datetime: booking,
-      status: "Scheduled",
       consultationAssignments: {
         deleteMany: {},
         create: [{ user_id: "u2" }],
@@ -149,7 +178,6 @@ it("updateConsultation clears last_reminded_at when resetReminderTiming is set",
     client_id: uuid,
     concern: "Breach of contract",
     booking_datetime: booking,
-    status: "Scheduled",
     resetReminderTiming: true,
   });
 
@@ -168,7 +196,6 @@ it("updateConsultation omits last_reminded_at when resetReminderTiming is not se
     client_id: uuid,
     concern: "Breach of contract",
     booking_datetime: booking,
-    status: "Scheduled",
   });
 
   expect(prisma.consultation.update).toHaveBeenCalledWith({
@@ -179,4 +206,190 @@ it("updateConsultation omits last_reminded_at when resetReminderTiming is not se
   expect(vi.mocked(prisma.consultation.update).mock.calls[0][0].data).not.toHaveProperty(
     "last_reminded_at",
   );
+});
+
+it("updateConsultationStatus updates only the status", async () => {
+  await updateConsultationStatus(uuid, "Accepted");
+
+  expect(prisma.consultation.update).toHaveBeenCalledWith({
+    where: { id: uuid },
+    data: { status: "Accepted" },
+    select: { id: true },
+  });
+});
+
+it("updateConsultationStatus with expectedStatus rejects when another transition won the race", async () => {
+  vi.mocked(prisma.consultation.updateMany).mockResolvedValue({ count: 0 });
+
+  await expect(updateConsultationStatus(uuid, "Completed", "Scheduled")).rejects.toThrow(
+    "Record changed by another user",
+  );
+  expect(prisma.consultation.updateMany).toHaveBeenCalledWith({
+    where: { id: uuid, status: "Scheduled" },
+    data: { status: "Completed" },
+  });
+});
+
+it("transitionConsultationWithNote saves the reason as a note", async () => {
+  await transitionConsultationWithNote({
+    consultationId: uuid,
+    status: "Rejected",
+    reason: "No merit",
+    decidedByUserId: "u1",
+  });
+
+  expect(prisma.consultation.update).toHaveBeenCalledWith({
+    where: { id: uuid },
+    data: { status: "Rejected" },
+    select: { id: true },
+  });
+  expect(prisma.note.create).toHaveBeenCalledWith({
+    data: {
+      content: "Rejection reason: No merit",
+      consultation_id: uuid,
+      created_by_user_id: "u1",
+    },
+    select: { id: true },
+  });
+});
+
+it("transitionConsultationWithNote labels a cancellation reason", async () => {
+  await transitionConsultationWithNote({
+    consultationId: uuid,
+    status: "Cancelled",
+    reason: "Client no-show",
+    decidedByUserId: "u1",
+  });
+
+  expect(prisma.note.create).toHaveBeenCalledWith({
+    data: {
+      content: "Cancellation reason: Client no-show",
+      consultation_id: uuid,
+      created_by_user_id: "u1",
+    },
+    select: { id: true },
+  });
+});
+
+it("transitionConsultationWithNote skips the note without a reason", async () => {
+  await transitionConsultationWithNote({
+    consultationId: uuid,
+    status: "Cancelled",
+    decidedByUserId: "u1",
+  });
+
+  expect(prisma.consultation.update).toHaveBeenCalledWith({
+    where: { id: uuid },
+    data: { status: "Cancelled" },
+    select: { id: true },
+  });
+  expect(prisma.note.create).not.toHaveBeenCalled();
+});
+
+const completedSource = {
+  id: uuid,
+  client_id: uuid,
+  concern: "Breach of contract",
+  booking_datetime: booking,
+  status: "Completed" as const,
+  created_by_user_id: "u1",
+  created_at: booking,
+  updated_at: booking,
+  last_reminded_at: null,
+};
+
+const existingCase = {
+  id: "existing-1",
+  client_id: uuid,
+  created_by_user_id: "u1",
+  status: "Open" as const,
+  created_at: booking,
+  updated_at: booking,
+  source_consultation_id: uuid,
+  case_title: "Smith vs Jones",
+  case_type: "Civil",
+  parties_involved: null,
+};
+
+it("acceptConsultationWithCase flips status and creates the case in one transaction", async () => {
+  vi.mocked(prisma.consultation.findUnique).mockResolvedValue(completedSource);
+  vi.mocked(prisma.case.findUnique).mockResolvedValue(null);
+  vi.mocked(prisma.case.create).mockResolvedValue({ ...existingCase, id: "case-1" });
+
+  const result = await acceptConsultationWithCase({
+    consultationId: uuid,
+    caseTitle: "Smith vs Jones",
+    caseType: "Civil",
+    status: "Open",
+    createdByUserId: "u1",
+  });
+
+  expect(result).toEqual({ caseId: "case-1" });
+  expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+  expect(prisma.consultation.update).toHaveBeenCalledWith({
+    where: { id: uuid },
+    data: { status: "Accepted" },
+    select: { id: true },
+  });
+  expect(prisma.case.create).toHaveBeenCalledWith({
+    data: expect.objectContaining({
+      client_id: uuid,
+      source_consultation_id: uuid,
+      created_by_user_id: "u1",
+    }),
+    select: { id: true },
+  });
+});
+
+it("acceptConsultationWithCase throws when the consultation is missing", async () => {
+  vi.mocked(prisma.consultation.findUnique).mockResolvedValue(null);
+
+  await expect(
+    acceptConsultationWithCase({
+      consultationId: uuid,
+      caseTitle: "Smith vs Jones",
+      caseType: "Civil",
+      status: "Open",
+      createdByUserId: "u1",
+    }),
+  ).rejects.toThrow("Consultation not found");
+  expect(prisma.consultation.update).not.toHaveBeenCalled();
+  expect(prisma.case.create).not.toHaveBeenCalled();
+});
+
+it("acceptConsultationWithCase throws when a case already exists", async () => {
+  vi.mocked(prisma.consultation.findUnique).mockResolvedValue(completedSource);
+  vi.mocked(prisma.case.findUnique).mockResolvedValue(existingCase);
+
+  await expect(
+    acceptConsultationWithCase({
+      consultationId: uuid,
+      caseTitle: "Smith vs Jones",
+      caseType: "Civil",
+      status: "Open",
+      createdByUserId: "u1",
+    }),
+  ).rejects.toThrow("A case already exists for this consultation");
+  expect(prisma.consultation.update).not.toHaveBeenCalled();
+  expect(prisma.case.create).not.toHaveBeenCalled();
+});
+
+it("acceptConsultationWithCase throws for a non-completed consultation", async () => {
+  vi.mocked(prisma.consultation.findUnique).mockResolvedValue({
+    ...completedSource,
+    status: "Scheduled",
+  });
+  vi.mocked(prisma.case.findUnique).mockResolvedValue(null);
+
+  await expect(
+    acceptConsultationWithCase({
+      consultationId: uuid,
+      caseTitle: "Smith vs Jones",
+      caseType: "Civil",
+      status: "Open",
+      createdByUserId: "u1",
+    }),
+  ).rejects.toThrow("Consultation cannot be accepted");
+  expect(prisma.consultation.update).not.toHaveBeenCalled();
+  expect(prisma.case.create).not.toHaveBeenCalled();
 });

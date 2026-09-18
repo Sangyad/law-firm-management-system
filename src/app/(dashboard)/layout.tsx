@@ -2,6 +2,7 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
 import { Header } from "@/components/layout/Header/Header";
+import { HeartbeatProvider } from "@/components/layout/HeartbeatClient/HeartbeatClient";
 import { Sidebar } from "@/components/layout/Sidebar/Sidebar";
 import { SidebarProvider } from "@/components/layout/Sidebar/sidebar-context";
 import { ToastRegion } from "@/components/ui/Toast/Toast";
@@ -12,7 +13,11 @@ import { auth } from "@/lib/auth";
 
 import styles from "./layout.module.css";
 
-export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
+interface DashboardLayoutProps {
+  children: React.ReactNode;
+}
+
+export default async function DashboardLayout({ children }: DashboardLayoutProps) {
   const session = await auth();
   if (!session?.user) {
     redirect("/");
@@ -42,12 +47,14 @@ export default async function DashboardLayout({ children }: { children: React.Re
             userImage={session?.user?.image}
           />
           <div className={styles.main}>
-            <Header
-              userImage={session?.user?.image ?? null}
-              userName={session?.user?.name}
-              userRole={session?.user?.role}
-              initialUnreadCount={initialUnreadCount}
-            />
+            <HeartbeatProvider>
+              <Header
+                userImage={session?.user?.image ?? null}
+                userName={session?.user?.name}
+                userRole={session?.user?.role}
+                initialUnreadCount={initialUnreadCount}
+              />
+            </HeartbeatProvider>
             <main className={styles.content}>{children}</main>
           </div>
         </SidebarProvider>

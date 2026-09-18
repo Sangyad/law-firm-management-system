@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/Button/Button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog/ConfirmDialog";
 import { type ColumnDef } from "@/components/ui/DataTable/DataTable";
 import { ServerDataTable } from "@/components/ui/ServerDataTable/ServerDataTable";
+import { StatusDot } from "@/components/ui/StatusDot/StatusDot";
 import { logoutUser } from "@/features/auth/actions";
 import { deactivateUserAction, getUsersPaginatedAction } from "@/features/users/actions";
 import { UserFormModal } from "@/features/users/components/UserFormModal/UserFormModal";
@@ -49,6 +50,14 @@ export function UserTable({ users, initialCursor, sessionUserRole }: UserTablePr
       name: "Name",
       isRowHeader: true,
       allowsSorting: true,
+      render: (_value, row) => {
+        return (
+          <span className={styles.statusDotRow}>
+            <StatusDot isOnline={row.is_online} />
+            {row.name}
+          </span>
+        );
+      },
     },
     {
       id: "email",
@@ -72,21 +81,20 @@ export function UserTable({ users, initialCursor, sessionUserRole }: UserTablePr
     {
       id: "is_active" as const,
       name: "Action" as const,
-      render: (_value: unknown, row: unknown) => {
-        const user = row as UserRow;
+      render: (_value, row) => {
         return (
           <div className={styles.actions}>
             <Button
               variant="ghost"
-              aria-label={`Edit ${user.name}`}
-              onPress={() => setModalTarget({ type: "edit", user })}
+              aria-label={`Edit ${row.name}`}
+              onPress={() => setModalTarget({ type: "edit", user: row })}
             >
               <FaPenToSquare className={styles.icon} />
             </Button>
             <Button
               variant="ghost"
-              aria-label={`Deactivate ${user.name}`}
-              onPress={() => setDeletingUser(user)}
+              aria-label={`Deactivate ${row.name}`}
+              onPress={() => setDeletingUser(row)}
             >
               <FaTrashCan className={styles.icon} />
             </Button>
@@ -119,6 +127,7 @@ export function UserTable({ users, initialCursor, sessionUserRole }: UserTablePr
 
       {modalTarget && (
         <UserFormModal
+          key={modalTarget.type === "edit" ? modalTarget.user.id : "new"}
           mode={modalTarget.type}
           user={modalTarget.type === "edit" ? modalTarget.user : undefined}
           isOpen

@@ -1,10 +1,21 @@
-import { Role } from "@/generated/prisma/client";
+import { Role } from "@/generated/prisma/browser";
 import { prisma } from "@/lib/prisma";
 
 export interface UserUpdatePayload {
   email?: string;
   role?: Role;
   is_active?: boolean;
+}
+
+/**
+ * Returns the Prisma client for the NextAuth Prisma adapter. The adapter needs
+ * the raw client, so this accessor keeps the direct `prisma` import inside the
+ * data layer instead of leaking it into `lib/auth.ts`.
+ *
+ * @returns The shared Prisma client instance.
+ */
+export function getAuthAdapterClient(): typeof prisma {
+  return prisma;
 }
 
 export async function upsertDeveloperUser(
@@ -65,5 +76,12 @@ export async function setUserActiveStatus(id: string, isActive: boolean): Promis
   await prisma.user.update({
     where: { id },
     data: { is_active: isActive },
+  });
+}
+
+export async function updateUserLastSeen(id: string): Promise<void> {
+  await prisma.user.update({
+    where: { id },
+    data: { last_seen_at: new Date() },
   });
 }

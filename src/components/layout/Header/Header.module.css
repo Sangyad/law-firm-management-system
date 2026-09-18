@@ -53,17 +53,28 @@
         color: var(--color-text-inverse);
         font-weight: var(--font-weight-bold);
         font-size: var(--font-size-sm);
-        overflow: hidden;
+        position: relative;
 
         .avatar {
           width: 100%;
           height: 100%;
           object-fit: cover;
+          border-radius: var(--radius-pill);
         }
 
         .userIcon {
           width: var(--icon-size-sm);
           height: var(--icon-size-sm);
+        }
+
+        .badge {
+          position: absolute;
+          bottom: -1px;
+          right: 1px;
+          width: 10px;
+          height: 10px;
+          border-radius: 50%;
+          border: 2px solid var(--color-surface-bg);
         }
       }
 

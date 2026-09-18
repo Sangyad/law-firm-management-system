@@ -18,4 +18,16 @@ describe("ClientDataSchema", () => {
       "Enter a valid email",
     );
   });
+
+  it("wires the shared phone rule", () => {
+    const field = ClientDataSchema.shape.phone_number;
+    expect(field.safeParse("09170000001").success).toBe(true);
+    expect(field.safeParse(undefined).error?.issues[0]?.message).toBe("Phone number is required");
+    expect(field.safeParse("12345").error?.issues[0]?.message).toBe(
+      "Phone number must be exactly 11 digits",
+    );
+    expect(field.safeParse("08170000001").error?.issues[0]?.message).toBe(
+      "Phone number must start with 09",
+    );
+  });
 });

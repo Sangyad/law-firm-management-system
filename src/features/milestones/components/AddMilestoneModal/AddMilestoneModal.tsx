@@ -1,30 +1,23 @@
 "use client";
 
-import { CalendarDate, getLocalTimeZone, today } from "@internationalized/date";
+import { CalendarDate, getLocalTimeZone, Time, today } from "@internationalized/date";
 import { useState } from "react";
 import { Form } from "react-aria-components";
 import { z } from "zod";
 
 import { Button } from "@/components/ui/Button/Button";
-import { DateField } from "@/components/ui/DateField/DateField";
+import { DatePicker } from "@/components/ui/DatePicker/DatePicker";
 import { Modal } from "@/components/ui/Modal/Modal";
-import { Select, SelectItem } from "@/components/ui/Select/Select";
 import { TextField } from "@/components/ui/TextField/TextField";
+import { TimeField } from "@/components/ui/TimeField/TimeField";
 import { createMilestoneAction } from "@/features/milestones/actions";
 import { MilestoneCreatePayloadSchema } from "@/features/milestones/schemas";
 import { CaseMilestoneStatus } from "@/generated/prisma/browser";
-import {
-  createFieldValidator,
-  optionalString,
-  requiredString,
-  selectEnumHandler,
-  toDateValue,
-} from "@/lib/form-utils";
+import { combineDateTime, isBeforeToday } from "@/lib/date";
+import { createFieldValidator, optionalString, requiredString } from "@/lib/form-utils";
 import { useModalForm } from "@/lib/useModalForm";
 
 import styles from "./AddMilestoneModal.module.css";
-
-const STATUS_OPTIONS = Object.values(CaseMilestoneStatus);
 
 interface AddMilestoneModalProps {
   isOpen: boolean;
@@ -42,7 +35,14 @@ export function AddMilestoneModal({
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [dueDate, setDueDate] = useState<CalendarDate>(today(getLocalTimeZone()));
-  const [status, setStatus] = useState<CaseMilestoneStatus>(CaseMilestoneStatus.Pending);
+  const [dueTime, setDueTime] = useState<Time>(new Time(9, 0));
+
+  function validateDueDate(): string | null {
+    if (isBeforeToday(combineDateTime(dueDate, dueTime))) {
+      return "Due date cannot be in the past";
+    }
+    return null;
+  }
 
   const { isPending, submitForm, handleCancel } = useModalForm<
     z.input<typeof MilestoneCreatePayloadSchema>
@@ -58,7 +58,7 @@ export function AddMilestoneModal({
       setTitle("");
       setDescription("");
       setDueDate(today(getLocalTimeZone()));
-      setStatus(CaseMilestoneStatus.Pending);
+      setDueTime(new Time(9, 0));
     },
   });
 
@@ -69,8 +69,8 @@ export function AddMilestoneModal({
     await submitForm({
       title: requiredString(title),
       description: optionalString(description),
-      due_date: toDateValue(dueDate),
-      status,
+      due_date: combineDateTime(dueDate, dueTime),
+      status: CaseMilestoneStatus.Pending,
       case_id: caseId,
     });
   }
@@ -82,7 +82,7 @@ export function AddMilestoneModal({
       onOpenChange={handleCancel}
       className={styles.modal}
     >
-      <Form onSubmit={handleSubmit}>
+      <Form validationBehavior="native" onSubmit={handleSubmit}>
         <div className={styles.content}>
           <TextField
             label="Title"
@@ -102,24 +102,19 @@ export function AddMilestoneModal({
             validate={createFieldValidator(MilestoneCreatePayloadSchema.shape.description)}
             isDisabled={isPending}
           />
-          <DateField
+          <DatePicker
             label="Due Date"
             value={dueDate}
             onChange={(v) => v && setDueDate(v)}
             isDisabled={isPending}
+            validate={validateDueDate}
           />
-          <Select
-            label="Status"
-            value={status}
-            onChange={selectEnumHandler(CaseMilestoneStatus, setStatus)}
+          <TimeField
+            label="Due Time"
+            value={dueTime}
+            onChange={(v) => v && setDueTime(new Time(v.hour, v.minute))}
             isDisabled={isPending}
-          >
-            {STATUS_OPTIONS.map((s) => (
-              <SelectItem key={s} id={s}>
-                {s}
-              </SelectItem>
-            ))}
-          </Select>
+          />
           <div className={styles.actions}>
             <Button variant="secondary" type="button" onPress={handleCancel} isDisabled={isPending}>
               Cancel
