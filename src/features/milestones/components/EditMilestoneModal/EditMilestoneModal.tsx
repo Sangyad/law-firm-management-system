@@ -1,32 +1,37 @@
 "use client";
 
-import { CalendarDate } from "@internationalized/date";
+import { CalendarDate, Time } from "@internationalized/date";
 import { useState } from "react";
 import { Form } from "react-aria-components";
 import { z } from "zod";
 
 import { Button } from "@/components/ui/Button/Button";
-import { DateField } from "@/components/ui/DateField/DateField";
+import { DatePicker } from "@/components/ui/DatePicker/DatePicker";
 import { Modal } from "@/components/ui/Modal/Modal";
 import { Select, SelectItem } from "@/components/ui/Select/Select";
 import { TextField } from "@/components/ui/TextField/TextField";
+import { TimeField } from "@/components/ui/TimeField/TimeField";
 import { updateMilestoneAction } from "@/features/milestones/actions";
 import type { MilestoneRow } from "@/features/milestones/queries";
 import { MilestoneUpdatePayloadSchema } from "@/features/milestones/schemas";
+import { milestoneStatusOptions } from "@/features/milestones/status";
 import { CaseMilestoneStatus } from "@/generated/prisma/browser";
-import { toCalendarDate } from "@/lib/date";
+import {
+  combineDateTime,
+  isAfterToday,
+  isBeforeToday,
+  toCalendarDate,
+  toTimeValue,
+} from "@/lib/date";
 import {
   createFieldValidator,
   optionalString,
   requiredString,
   selectEnumHandler,
-  toDateValue,
 } from "@/lib/form-utils";
 import { useModalForm } from "@/lib/useModalForm";
 
 import styles from "./EditMilestoneModal.module.css";
-
-const STATUS_OPTIONS = Object.values(CaseMilestoneStatus);
 
 interface EditMilestoneModalProps {
   isOpen: boolean;
@@ -44,9 +49,24 @@ export function EditMilestoneModal({
   const [title, setTitle] = useState(milestone.title);
   const [description, setDescription] = useState(milestone.description ?? "");
   const [dueDate, setDueDate] = useState<CalendarDate>(toCalendarDate(milestone.due_date));
+  const [dueTime, setDueTime] = useState<Time>(toTimeValue(milestone.due_date));
   const [status, setStatus] = useState<CaseMilestoneStatus>(
     milestone.status as CaseMilestoneStatus,
   );
+  const newDueDate = combineDateTime(dueDate, dueTime);
+  const dueDateChanged = newDueDate.getTime() !== milestone.due_date.getTime();
+  const statusChanged = status !== milestone.status;
+
+  function validateDueDate(): string | null {
+    if (!dueDateChanged && !statusChanged) return null;
+    if (status === CaseMilestoneStatus.Pending && isBeforeToday(newDueDate)) {
+      return "Due date cannot be in the past";
+    }
+    if (status === CaseMilestoneStatus.Done && isAfterToday(newDueDate)) {
+      return "Due date cannot be in the future";
+    }
+    return null;
+  }
 
   const { isPending, submitForm, handleCancel } = useModalForm<
     z.input<typeof MilestoneUpdatePayloadSchema>
@@ -68,7 +88,7 @@ export function EditMilestoneModal({
       milestoneId: milestone.id,
       title: requiredString(title),
       description: optionalString(description),
-      due_date: toDateValue(dueDate),
+      due_date: newDueDate,
       status,
     });
   }
@@ -80,7 +100,7 @@ export function EditMilestoneModal({
       onOpenChange={handleCancel}
       className={styles.modal}
     >
-      <Form onSubmit={handleSave}>
+      <Form validationBehavior="native" onSubmit={handleSave}>
         <div className={styles.content}>
           <TextField
             label="Title"
@@ -100,10 +120,17 @@ export function EditMilestoneModal({
             validate={createFieldValidator(MilestoneUpdatePayloadSchema.shape.description)}
             isDisabled={isPending}
           />
-          <DateField
+          <DatePicker
             label="Due Date"
             value={dueDate}
             onChange={(v) => v && setDueDate(v)}
+            isDisabled={isPending}
+            validate={validateDueDate}
+          />
+          <TimeField
+            label="Due Time"
+            value={dueTime}
+            onChange={(v) => v && setDueTime(new Time(v.hour, v.minute))}
             isDisabled={isPending}
           />
           <Select
@@ -111,8 +138,13 @@ export function EditMilestoneModal({
             value={status}
             onChange={selectEnumHandler(CaseMilestoneStatus, setStatus)}
             isDisabled={isPending}
+            description={
+              milestone.status === CaseMilestoneStatus.Pending
+                ? undefined
+                : "Selecting Pending reopens this milestone and restarts its reminders."
+            }
           >
-            {STATUS_OPTIONS.map((s) => (
+            {milestoneStatusOptions(milestone.status as CaseMilestoneStatus).map((s) => (
               <SelectItem key={s} id={s}>
                 {s}
               </SelectItem>

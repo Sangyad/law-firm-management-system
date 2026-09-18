@@ -5,25 +5,32 @@ import { useEffect, useRef, useState } from "react";
 import { FaArrowLeft } from "react-icons/fa6";
 
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog/ConfirmDialog";
+import { DecisionModal } from "@/components/ui/DecisionModal/DecisionModal";
 import { Link } from "@/components/ui/Link/Link";
 import { Tab, TabList, TabPanel, TabPanels, Tabs } from "@/components/ui/Tabs/Tabs";
 import { useNavigationProgress } from "@/components/ui/TopProgressBar/navigation-context";
 import { ActivityLogTab } from "@/features/audit/components/ActivityLogTab/ActivityLogTab";
+import { CreateCaseFromConsultationModal } from "@/features/cases/components/CreateCaseFromConsultationModal/CreateCaseFromConsultationModal";
 import { getClientForEditAction } from "@/features/clients/actions";
 import type { ClientEditData } from "@/features/clients/queries";
 import {
+  changeConsultationStatusAction,
   deleteConsultationAction,
   getConsultationForEditAction,
 } from "@/features/consultations/actions";
+import { ConsultationWorkflowActions } from "@/features/consultations/components/ConsultationWorkflowActions/ConsultationWorkflowActions";
 import { EditConsultationModal } from "@/features/consultations/components/EditConsultationModal/EditConsultationModal";
 import type {
   ConsultationEditData,
   ConsultationOverviewData,
 } from "@/features/consultations/queries";
+import { ConsultationStatusChangePayloadSchema } from "@/features/consultations/schemas";
 import { AttachmentsTab } from "@/features/documents/components/AttachmentsTab/AttachmentsTab";
 import { NotesTab } from "@/features/notes/components/NotesTab/NotesTab";
 import { PaymentsTab } from "@/features/payments/components/PaymentsTab/PaymentsTab";
-import type { Role } from "@/generated/prisma/browser";
+import { getActiveUsersAction } from "@/features/users/actions";
+import type { ActiveUserSummary } from "@/features/users/queries";
+import { ConsultationStatus, type Role } from "@/generated/prisma/browser";
 import { can, type AccessContext } from "@/lib/rbac";
 import {
   toastActionError,
@@ -32,6 +39,7 @@ import {
   toastNotFound,
   toastSuccess,
 } from "@/lib/toast-utils";
+import { useStatusWorkflow } from "@/lib/useStatusWorkflow";
 
 import { ConsultationOverview } from "../ConsultationOverview/ConsultationOverview";
 import styles from "./ConsultationDetail.module.css";
@@ -54,6 +62,14 @@ export function ConsultationDetail({ overview, access, userRole }: Props) {
 
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [isEditPending, setIsEditPending] = useState(false);
+
+  const [showCaseModal, setShowCaseModal] = useState(false);
+  const [workflowUsers, setWorkflowUsers] = useState<ActiveUserSummary[]>([]);
+  const [decisionModal, setDecisionModal] = useState<Extract<
+    ConsultationStatus,
+    "Rejected" | "Cancelled"
+  > | null>(null);
+  const [showCompleteConfirm, setShowCompleteConfirm] = useState(false);
 
   const canViewPayments = can(userRole, "payment.read");
 
@@ -141,6 +157,64 @@ export function ConsultationDetail({ overview, access, userRole }: Props) {
     }
   }
 
+  const { isWorkflowPending, runWorkflowTask, applyChange } = useStatusWorkflow({
+    operation: "change consultation status",
+  });
+
+  async function applyStatusChange(status: ConsultationStatus, reason?: string): Promise<boolean> {
+    const succeeded = await applyChange(
+      () =>
+        changeConsultationStatusAction({
+          consultationId: overview.id,
+          status,
+          ...(reason ? { reason } : {}),
+        }),
+      `The consultation has been marked as ${status}.`,
+    );
+    if (succeeded) {
+      router.refresh();
+    }
+    return succeeded;
+  }
+
+  async function handleAcceptOpen() {
+    await runWorkflowTask(async () => {
+      const users = await getActiveUsersAction();
+      setWorkflowUsers(users);
+      setShowCaseModal(true);
+    }, "Failed to accept consultation");
+  }
+
+  async function handleDecisionConfirm(reason?: string): Promise<boolean> {
+    if (!decisionModal) return false;
+    const target = decisionModal;
+    const succeeded = await applyStatusChange(target, reason);
+    if (succeeded) setDecisionModal(null);
+    return succeeded;
+  }
+
+  async function handleCompleteConfirm() {
+    setShowCompleteConfirm(false);
+    await applyStatusChange(ConsultationStatus.Completed);
+  }
+
+  async function handleChangeStatus(status: ConsultationStatus) {
+    if (status === ConsultationStatus.Accepted) {
+      await handleAcceptOpen();
+      return;
+    }
+    if (status === ConsultationStatus.Rejected || status === ConsultationStatus.Cancelled) {
+      setDecisionModal(status);
+      return;
+    }
+    if (status === ConsultationStatus.Completed) {
+      setShowCompleteConfirm(true);
+      return;
+    }
+
+    await applyStatusChange(status);
+  }
+
   return (
     <div className={styles.detail}>
       <Link href="/consultation" className={styles.backLink}>
@@ -152,6 +226,14 @@ export function ConsultationDetail({ overview, access, userRole }: Props) {
         onEdit={handleEdit}
         onDelete={() => setShowDeleteConfirm(true)}
         isEditPending={isEditPending}
+        workflowActions={
+          <ConsultationWorkflowActions
+            status={overview.status as ConsultationStatus}
+            hasLinkedCase={overview.relatedCase !== null}
+            onChangeStatus={handleChangeStatus}
+            isPending={isWorkflowPending}
+          />
+        }
       />
 
       {selectedKey ? (
@@ -203,6 +285,10 @@ export function ConsultationDetail({ overview, access, userRole }: Props) {
           }}
           consultation={editData.consultation}
           clientData={editData.clientData}
+          isLocked={
+            overview.status === ConsultationStatus.Accepted && overview.relatedCase !== null
+          }
+          linkedCaseId={overview.relatedCase?.id ?? null}
         />
       )}
 
@@ -216,6 +302,60 @@ export function ConsultationDetail({ overview, access, userRole }: Props) {
         This permanently deletes the consultation and ALL its notes, documents, and payments. Linked
         cases are kept (unlinked). This action cannot be undone.
       </ConfirmDialog>
+
+      <ConfirmDialog
+        isOpen={showCompleteConfirm}
+        onOpenChange={setShowCompleteConfirm}
+        title="Mark as completed"
+        confirmLabel="Mark completed"
+        onConfirm={handleCompleteConfirm}
+      >
+        Confirm the meeting has been held. The consultation will be ready for an accept or reject
+        decision.
+      </ConfirmDialog>
+
+      <DecisionModal
+        isOpen={decisionModal === ConsultationStatus.Rejected}
+        onOpenChange={(open) => {
+          if (!open) setDecisionModal(null);
+        }}
+        title="Reject consultation"
+        description="The consultation will be marked as rejected. This cannot be undone. You can still edit its concern, client, and team, but the booking is frozen."
+        reasonLabel="Rejection reason"
+        reasonPlaceholder="Optional — why is this being rejected?"
+        confirmLabel="Reject"
+        reasonSchema={ConsultationStatusChangePayloadSchema.shape.reason}
+        onConfirm={handleDecisionConfirm}
+      />
+
+      <DecisionModal
+        isOpen={decisionModal === ConsultationStatus.Cancelled}
+        onOpenChange={(open) => {
+          if (!open) setDecisionModal(null);
+        }}
+        title="Cancel consultation"
+        description="The consultation will be marked as cancelled. Its booking is frozen, but you can rebook it later. Concern, client, and team stay editable."
+        reasonLabel="Cancellation reason"
+        reasonPlaceholder="Optional — why is this being cancelled?"
+        confirmLabel="Cancel consultation"
+        reasonSchema={ConsultationStatusChangePayloadSchema.shape.reason}
+        onConfirm={handleDecisionConfirm}
+      />
+
+      <CreateCaseFromConsultationModal
+        key={overview.id}
+        isOpen={showCaseModal}
+        onOpenChange={setShowCaseModal}
+        onSuccess={(caseId) => {
+          setShowCaseModal(false);
+          startLoading();
+          router.push(`/case/${caseId}`);
+        }}
+        onCancel={() => setShowCaseModal(false)}
+        consultationId={overview.id}
+        defaultTitle={overview.concern}
+        users={workflowUsers}
+      />
     </div>
   );
 }
